@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestAccCloudflareOriginCACertificate_Basic(t *testing.T) {
 				Config: testAccCheckCloudflareOriginCACertificateConfigBasic(rnd, zoneName, csr),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudflareOriginCACertificateExists(name, &cert),
-					testAccCheckCloudflareOriginCACertificateAttributes(zoneName, &cert),
+					testAccCheckCloudflareOriginCACertificateAttributes(zoneName, name, &cert),
 					resource.TestMatchResourceAttr(name, "id", regexp.MustCompile("^[0-9]+$")),
 					resource.TestCheckResourceAttr(name, "csr", csr),
 					resource.TestCheckResourceAttr(name, "request_type", "origin-rsa"),
@@ -97,7 +98,7 @@ func testAccCheckCloudflareOriginCACertificateExists(name string, cert *cloudfla
 	}
 }
 
-func testAccCheckCloudflareOriginCACertificateAttributes(zone string, cert *cloudflare.OriginCACertificate) resource.TestCheckFunc {
+func testAccCheckCloudflareOriginCACertificateAttributes(name string, zone string, cert *cloudflare.OriginCACertificate) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		actual := schema.NewSet(schema.HashString, []interface{}{})
 		for _, h := range cert.Hostnames {
@@ -118,8 +119,15 @@ func testAccCheckCloudflareOriginCACertificateAttributes(zone string, cert *clou
 			return err
 		}
 
-		if !cert.ExpiresOn.After(time.Now()) {
-			return fmt.Errorf("Expiration date of new cert is in the past: %s", cert.ExpiresOn.Format(time.RFC3339))
+		r := s.RootModule().Resources[name]
+		requested_validity, _ := strconv.ParseInt(r.Primary.Attributes["requested_validity"], 10, 0)
+
+		if !cert.ExpiresOn.After(time.Now().AddDate(0, 0, int(requested_validity)-1)) {
+			return fmt.Errorf("Cert should expire at least (%d) days from now: %s", requested_validity-1, cert.ExpiresOn.Format(time.RFC3339))
+		}
+
+		if !cert.ExpiresOn.Before(time.Now().AddDate(0, 0, int(requested_validity))) {
+			return fmt.Errorf("Cert should not expire after (%d) days from now: %s", requested_validity, cert.ExpiresOn.Format(time.RFC3339))
 		}
 
 		return nil
